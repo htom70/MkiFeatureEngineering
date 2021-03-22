@@ -1,29 +1,33 @@
 import mariadb
 import numpy as np
 import statistics
+import math
+
+
+def getConnection(databaseName):
+    connectionContainer = dict()
+    if connectionContainer.get(databaseName) is None:
+        connection = mariadb.connect(
+            pool_name=databaseName,
+            pool_size=8,
+            host="store.usr.user.hu",
+            user="mki",
+            password="pwd",
+            database=databaseName
+        )
+        connectionContainer[databaseName] = connection
+    return connectionContainer.get(databaseName)
 
 
 def getAllRecordsFromDatabase(databaseName):
-    # connection = mysql.connector.connect(
-    #     host="localhost",
-    #     user="root",
-    #     password="TOmi_1970",
-    #     database="retired_transaction")
-
-    connection = mariadb.connect(
-        # pool_name="read_pull",
-        # pool_size=1,
-        host="store.usr.user.hu",
-        user="mki",
-        password="pwd",
-        database=databaseName
-    )
+    connection = getConnection(databaseName)
     print(connection)
     sql_select_Query = "select * from transaction order by timestamp"
     cursor = connection.cursor()
     cursor.execute(sql_select_Query)
     result = cursor.fetchall()
-    # connection.close()
+    cursor.close()
+    connection.close()
     numpy_array = np.array(result)
     length = len(numpy_array)
     print(f'{databaseName} beolvasva, rekordok száma: {length}')
@@ -58,196 +62,156 @@ def createDatabase(databaseName):
     cursor.execute("DROP TABLE IF EXISTS transaction")
     cursor.execute(sqlCreataTableScript)
     connection.commit()
+    cursor.close()
     connection.close()
     print(f"{databaseName} created")
 
 
-def getAmountPropertiesByTerm(databaseName, term, cardNumber, timestamp):
-    connection = mariadb.connect(
-        # pool_name="read_pull",
-        # pool_size=1,
-        host="store.usr.user.hu",
-        user="mki",
-        password="pwd",
-        database=databaseName
-    )
+def getFirstDateFromJulian(databaseName):
+    connection = getConnection(databaseName)
     cursor = connection.cursor()
-    amountPropertiesByTerms = dict()
-    if term == 'full':
-        sqlQuery = f"select AVG(amount), STDDEV(amount), median(amount)  over (PARTITION BY card_number) from {databaseName}.transaction where card_number = {cardNumber};"
-        keyName = term
-    else:
-        lowerBorder = timestamp - term
-        sqlQuery = f"select AVG(amount), STDDEV(amount), median(amount)  over (PARTITION BY card_number) from {databaseName}.transaction where card_number = {cardNumber} and timestamp between {timestamp} and {lowerBorder}"
-        keyName = str(term)
+    sqlQuery = f"select timestamp from {databaseName}.transaction order by timestamp asc limit 1;"
     cursor.execute(sqlQuery)
-    result = cursor.fetchall()
-    for line in result:
-        average = line[0]
-        deviation = line[1]
-        median = line[2]
-        items = [average, deviation, median]
-        amountPropertiesByTerms[keyName] = items
+    result = cursor.fetchone()
     cursor.close()
     connection.close()
-    return amountPropertiesByTerms
+    firstDate = math.floor(result[0])
+    return firstDate
 
 
-def getTransacTionAmountProperties(databaseName, term, cardNumber, timestamp, amount):
-    amountAggregates = dict()
-    amountProperties = getAmountPropertiesByTerm(databaseName, term, cardNumber, timestamp)
-    averageAmount = amountProperties.get(term)[0]
-    deviationAmount = amountProperties.get(term)[1]
-    medianAmount = amountProperties.get(term)[2]
-    amountToAverageAmountRatio = amount / averageAmount
-    amountToAverageAmountDiff = amount - averageAmount
-    amountToMedianAmountRatio = amount / medianAmount
-    amountToMedianAmountDiff = amount - medianAmount
-    amountToDeviationAmountRatio = amount / deviationAmount
-    amountToDeviationAmountDiff = amount - deviationAmount
-
-    amountAggregates['amountToAverageAmountRatio'] = amountToAverageAmountRatio
-    amountAggregates['amountToAverageAmountDiff'] = amountToAverageAmountDiff
-    amountAggregates['amountToMedianAmountRatio'] = amountToMedianAmountRatio
-    amountAggregates['amountToMedianAmountDiff'] = amountToMedianAmountDiff
-    amountAggregates['amountToDeviationAmountRatio'] = amountToDeviationAmountRatio
-    amountAggregates['amountToDeviationAmountDiff'] = amountToDeviationAmountDiff
-    return amountAggregates
-
-
-def getTransacTionNumberPropertiesByTerm(databaseName, term, cardNumber, timestamp):
-    connection = mariadb.connect(
-        # pool_name="read_pull",
-        # pool_size=1,
-        host="store.usr.user.hu",
-        user="mki",
-        password="pwd",
-        database=databaseName
-    )
+def getTransacTionAmountProperties(databaseName, term, cardNumber, timestamp, amount, firstDate):
+    connection = getConnection(databaseName)
     cursor = connection.cursor()
-    transactionNumberPropertiesByTerms = dict()
-    lowerDailyBorder = term - 1
-    sqlQuery = f"select COUNT(*) from {databaseName}.transaction where card_number = {cardNumber} and timestamp between {timestamp} and {lowerDailyBorder}"
-    cursor.execute(sqlQuery)
-    transactionNumberOnCurrenDay = cursor.fetchall()
-    if term == 'full':
-        sqlQuery = f"select AVG(amount), median(amount)  over () from {databaseName}.transaction where card_number = {cardNumber};"
-        keyName = term
+    if term == 'earlier':
+        sqlQuery = f"select AVG(amount), STDDEV(amount), median(amount)  over (PARTITION BY amount) from {databaseName}.transaction where card_number = {cardNumber} and timestamp between {firstDate} and {timestamp};"
     else:
         lowerBorder = timestamp - term
-        sqlQuery = f"select AVG(amount), median(amount)  over () from {databaseName}.transaction where card_number = {cardNumber} and timestamp between {timestamp} and {lowerBorder}"
-        keyName = str(term)
+        sqlQuery = f"select AVG(amount), STDDEV(amount), median(amount)  over (PARTITION BY amount) from {databaseName}.transaction where card_number = {cardNumber} and timestamp between {lowerBorder} and {timestamp}"
     cursor.execute(sqlQuery)
     result = cursor.fetchall()
-    # averageTransactionNumber = 0
-    # medianTransactionNumber = 0
-    if term == 'full':
-        averageTransactionNumber = result[0] / 365
-        medianTransactionNumber = result[1] / 365
-    else:
-        averageTransactionNumber = result[0] / term
-        medianTransactionNumber = result[1] / term
-    transactionNumberToAverageDailyTransactionNumberRatio = transactionNumberOnCurrenDay / averageTransactionNumber
-    transactionNumberToAverageDailyTransactionNumberDiff = transactionNumberOnCurrenDay - averageTransactionNumber
-    transactionNumberToMedianDailyTransactionNumberRatio = transactionNumberOnCurrenDay / medianTransactionNumber
-    transactionNumberToMedianDailyTransactionNumberDiff = transactionNumberOnCurrenDay - medianTransactionNumber
-    transactionNumberPropertiesByTerms[
-        'transactionNumberToAverageDailyTransactionNumberRatio'] = transactionNumberToAverageDailyTransactionNumberRatio
-    transactionNumberPropertiesByTerms[
-        'transactionNumberToAverageDailyTransactionNumberDiff'] = transactionNumberToAverageDailyTransactionNumberDiff
-    transactionNumberPropertiesByTerms[
-        'transactionNumberToMedianDailyTransactionNumberRatio'] = transactionNumberToMedianDailyTransactionNumberRatio
-    transactionNumberPropertiesByTerms[
-        'transactionNumberToMedianDailyTransactionNumberDiff'] = transactionNumberToMedianDailyTransactionNumberDiff
-    return transactionNumberPropertiesByTerms
+    cursor.close()
+    connection.close()
+    temp = result[0][0]
+    averageAmount = temp if temp is not None else 0
+    temp = result[0][1]
+    deviationAmount = temp if temp is not None else 0
+    temp = result[0][2]
+    medianAmount = temp if temp is not None else 0
+    amountToAverageAmountRatio = amount / averageAmount if averageAmount != 0 else 0
+    amountToAverageAmountDiff = amount - averageAmount
+    amountToMedianAmountRatio = amount / medianAmount if medianAmount != 0 else 0
+    amountToMedianAmountDiff = amount - medianAmount
+    amountToDeviationAmountRatio = amount / deviationAmount if deviationAmount != 0 else 0
+    amountToDeviationAmountDiff = amount - deviationAmount
+    resultList = [amountToAverageAmountRatio, amountToAverageAmountDiff, amountToMedianAmountRatio,
+                  amountToMedianAmountDiff, amountToDeviationAmountRatio, amountToDeviationAmountDiff]
+    return resultList
 
 
-def getTransacTionNumberProperties(databaseName, term, currentCardNumber, currentTimestamp, currentAmount):
-    pass
-
-
-def getExtendedTransactionFeatures(transactionFeature, transactionAmountProperties, transactionNumberProperties,
-                                   transacTionIntervalProperties):
-    pass
-
-
-def getAverageInterval(input, term):
-    sum=0
-    length= len(input)
-    for i in range(1,length,1):
-        diff=input[i]-input[i-1]
-        sum+=diff
-    if term=='full':
-        average=sum/365
-    else:
-        average=sum/term
-    return average
-
-
-
-def getTransacTionIntervalProperties(databaseName, term, cardNumber, timestamp):
-    connection = mariadb.connect(
-        # pool_name="read_pull",
-        # pool_size=1,
-        host="store.usr.user.hu",
-        user="mki",
-        password="pwd",
-        database=databaseName
-    )
+def getTransacTionNumberProperties(databaseName, term, cardNumber, timestamp, firstDate):
+    connection = getConnection(databaseName)
     cursor = connection.cursor()
-    intervalPropertiesByTerm=dict()
-    sqlQuery = f"select timestamp from {databaseName}.transaction where card_number = {cardNumber} and timestamp <= {timestamp}  order by timestamp desc limit 2;"
+    lowerDailyBorder = term - 1
+    sqlQuery = f"select COUNT(*) from {databaseName}.transaction where card_number = {cardNumber} and timestamp between {lowerDailyBorder} and {timestamp}"
+    cursor.execute(sqlQuery)
+    transactionNumberOnCurrentDay = cursor.fetchall()
+    if term == 'earlier':
+        firstDay = firstDate
+        sqlQuery = f"select COUNT(*) from {databaseName}.transaction where card_number = {cardNumber} and timestamp between {firstDate} and {timestamp}"
+    else:
+        firstDay = math.floor(timestamp - term)
+        lowerBorder = timestamp - term
+        sqlQuery = f"select AVG(amount), median(amount)  over () from {databaseName}.transaction where card_number = {cardNumber} and timestamp between {lowerBorder} and {timestamp}"
+    dayNumber = math.floor(timestamp - firstDay)
+    transactionNumberList = list()
+    upperBorder = math.floor(timestamp)
+    while dayNumber > 0:
+        lowerBorder = upperBorder - 1
+        sqlQuery = f"select COUNT(*) from {databaseName}.transaction where card_number = {cardNumber} and timestamp between {lowerBorder} and {upperBorder}"
+        cursor.execute(sqlQuery)
+        transactioNumber = cursor.fetchone()
+        transactionNumberList.append(transactioNumber)
+        dayNumber = dayNumber - 1
+        upperBorder = upperBorder - 1
+    cursor.close()
+    connection.close()
+    averageTransactionNumber = statistics.mean(transactionNumberList)
+    medianTransactionNumber = statistics.median(transactionNumberList)
+    transactionNumberToAverageDailyTransactionNumberRatio = transactionNumberOnCurrentDay / averageTransactionNumber if averageTransactionNumber != 0 else 0
+    transactionNumberToAverageDailyTransactionNumberDiff = transactionNumberOnCurrentDay - averageTransactionNumber
+    transactionNumberToMedianDailyTransactionNumberRatio = transactionNumberOnCurrentDay / medianTransactionNumber if medianTransactionNumber != 0 else 0
+    transactionNumberToMedianDailyTransactionNumberDiff = transactionNumberOnCurrentDay - medianTransactionNumber
+    resultList = [transactionNumberToAverageDailyTransactionNumberRatio,
+                  transactionNumberToAverageDailyTransactionNumberDiff,
+                  transactionNumberToMedianDailyTransactionNumberRatio,
+                  transactionNumberToMedianDailyTransactionNumberDiff]
+    return resultList
+
+
+def getTransacTionIntervalProperties(databaseName, term, cardNumber, timestamp, firstDate):
+    connection = getConnection(databaseName)
+    cursor = connection.cursor()
+    sqlQuery = f"select timestamp from {databaseName}.transaction where card_number = {cardNumber} and timestamp between {firstDate} and {timestamp}  order by timestamp desc limit 2;"
     cursor.execute(sqlQuery)
     result = cursor.fetchall()
     currentInterval = result[0] - result[1]
-    if term == 'full':
-        sqlQuery = f"select timestamp from {databaseName}.transaction where card_number = {cardNumber} and timestamp <= {timestamp}  order by timestamp desc;"
+    if term == 'earlier':
+        sqlQuery = f"select timestamp from {databaseName}.transaction where card_number = {cardNumber} and timestamp between {firstDate} and {timestamp} and  order by timestamp desc;"
     else:
         lowerBorder = timestamp - term
-        sqlQuery = f"select timestamp from {databaseName}.transaction where card_number = {cardNumber} and timestamp between {timestamp} and {lowerBorder}"
+        sqlQuery = f"select timestamp from {databaseName}.transaction where card_number = {cardNumber} and timestamp between {lowerBorder} and {timestamp}"
     cursor.execute(sqlQuery)
     result = cursor.fetchall()
+    cursor.close()
+    connection.close()
     averageInterval = statistics.mean(result)
     medianInterval = statistics.median(result)
-    intervalToAverageIntervalRatio = currentInterval / averageInterval
+    intervalToAverageIntervalRatio = currentInterval / averageInterval if averageInterval != 0 else 0
     intervalToAverageIntervalDiff = currentInterval - averageInterval
-    intervalToMedianIntervalRatio = currentInterval / medianInterval
+    intervalToMedianIntervalRatio = currentInterval / medianInterval if medianInterval != 0 else 0
     intervalToMedianIntervalDiff = currentInterval - medianInterval
-    intervalPropertiesByTerm['intervalToAverageIntervalRatio']=intervalToAverageIntervalRatio
-    intervalPropertiesByTerm['intervalToAverageIntervalDiff']=intervalToAverageIntervalDiff
-    intervalPropertiesByTerm['intervalToMedianIntervalRatio']=intervalToMedianIntervalRatio
-    intervalPropertiesByTerm['intervalToMedianIntervalDiff']=intervalToMedianIntervalDiff
-    return intervalPropertiesByTerm
+    resultList = [intervalToAverageIntervalRatio, intervalToAverageIntervalDiff, intervalToMedianIntervalRatio,
+                  intervalToMedianIntervalDiff]
+    return resultList
 
 
-def saveExtendedDataset(extendedDataset):
-    pass
+def saveExtendedDataset(databaseName, extendedDataset):
+    connection = getConnection(databaseName)
 
 
 if __name__ == '__main__':
     databaseNames = ["card_10000_5_i"]
     # databaseNames = ["card_10000_5_i", "card_100000_1_i", "card_250000_02_i", "card_i"]
-    terms = [3, 7, 15, 30, 'full']
+    terms = [3, 7, 15, 30, 'earlier']
     for databaseName in databaseNames:
         aggregatedAndImputedDatebaseName = databaseName + "_a"
         createDatabase(aggregatedAndImputedDatebaseName)
         dataset = getAllRecordsFromDatabase(databaseName)
+        firstDate = getFirstDateFromJulian(databaseName)
         extendedDataset = list()
         transactionFeatures = dataset[:, 1:-1]
-        for transactionFeature in transactionFeatures:
-            currentCardNumber = transactionFeature[:, :1]
-            currentTimestamp = transactionFeature[:, 2:3]
-            currentAmount = transactionFeature[:, 3:4]
+        tranactionLabels = dataset[:, -1:]
+        length = len(transactionFeatures)
+        for i in range(length):
+            transactionFeature = transactionFeatures[i]
+            currentCardNumber = math.floor(transactionFeature[0])
+            currentTimestamp = transactionFeature[2]
+            currentAmount = transactionFeature[3]
+            transactionFeatureList = list(transactionFeature)
             for term in terms:
                 transactionAmountProperties = getTransacTionAmountProperties(databaseName, term, currentCardNumber,
-                                                                             currentTimestamp, currentAmount)
+                                                                             currentTimestamp, currentAmount, firstDate)
                 transactionNumberProperties = getTransacTionNumberProperties(databaseName, term, currentCardNumber,
-                                                                             currentTimestamp, currentAmount)
-                transacTionIntervalProperties = getTransacTionIntervalProperties(databaseName, term, currentCardNumber,
-                                                                                 currentTimestamp, currentAmount)
-                extendedTransactionRecord = getExtendedTransactionFeatures(transactionFeature,
-                                                                           transactionAmountProperties,
-                                                                           transactionNumberProperties,
-                                                                           transacTionIntervalProperties)
-                extendedDataset.append(extendedTransactionRecord)
+                                                                             currentTimestamp, firstDate)
+                transactionIntervalProperties = getTransacTionIntervalProperties(databaseName, term, currentCardNumber,
+                                                                                 currentTimestamp, firstDate)
+
+                transactionFeatureList.extend(transactionAmountProperties)
+                transactionFeatureList.extend(transactionNumberProperties)
+                transactionFeatureList.extend(transactionIntervalProperties)
+                label = tranactionLabels[i][0]
+                record = transactionFeatureList.append(label)
+                recordArray = np.array(record)
+                extendedDataset.append(tuple(recordArray))
+                print(len(extendedDataset))
         saveExtendedDataset(databaseName, extendedDataset)
